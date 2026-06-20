@@ -9,7 +9,7 @@ use evdev::{
     RelativeAxisCode, UinputAbsSetup,
 };
 use once_cell::sync::Lazy;
-use std::ffi::{c_int, c_uint, c_ulong};
+use std::ffi::{c_char, c_int, c_uint, c_ulong};
 use std::sync::Mutex;
 
 // Opaque type
@@ -195,4 +195,59 @@ pub extern "C" fn XTestFakeMotionEvent(
     ];
     dev.emit(&events).unwrap();
     1
+}
+
+type XQueryExtensionFn = unsafe extern "C" fn(
+    *mut Display, *const c_char, *mut c_int, *mut c_int, *mut c_int,
+) -> c_int;
+
+static REAL_XQUERY: Lazy<Mutex<Option<XQueryExtensionFn>>> = Lazy::new(|| Mutex::new(None));
+
+unsafe fn get_real_xquery() -> XQueryExtensionFn {
+    let mut guard = REAL_XQUERY.lock().unwrap();
+    if guard.is_none() {
+        // Use RTLD_NEXT to find the real XQueryExtension from libX11
+        let ptr = libc::dlsym(
+            libc::RTLD_NEXT,
+            b"XQueryExtension\0".as_ptr() as *const c_char,
+        );
+        *guard = Some(std::mem::transmute(ptr));
+    }
+    guard.unwrap()
+}
+
+#[no_mangle]
+pub extern "C" fn XTestQueryExtension(
+    dpy: *mut Display,
+    event_base: *mut c_int,
+    error_base: *mut c_int,
+    major_version: *mut c_int,
+    minor_version: *mut c_int,
+) -> bool {
+    unsafe {
+        if !event_base.is_null() { *event_base = 0; }
+        if !error_base.is_null() { *error_base = 0; }
+        if !major_version.is_null() { *major_version = 2; }
+        if !minor_version.is_null() { *minor_version = 2; }
+    }
+    true
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XQueryExtension(
+    dpy: *mut Display,
+    name: *const c_char,
+    major_opcode: *mut c_int,
+    first_event: *mut c_int,
+    first_error: *mut c_int,
+) -> c_int {
+    let cname = std::ffi::CStr::from_ptr(name);
+    if cname.to_bytes() == b"XTEST" {
+        if !major_opcode.is_null() { *major_opcode = 1; }
+        if !first_event.is_null() { *first_event = 0; }
+        if !first_error.is_null() { *first_error = 0; }
+        return 1;
+    }
+    let real = get_real_xquery();
+    real(dpy, name, major_opcode, first_event, first_error)
 }

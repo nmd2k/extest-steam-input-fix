@@ -86,6 +86,7 @@ name = "extest"
 version = "1.0.4"
 dependencies = [
  "evdev",
+ "libc",
  "once_cell",
  "wayland-client",
  "wayland-protocols",
